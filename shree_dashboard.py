@@ -14,7 +14,7 @@ BASE_URL   = "https://paper-api.alpaca.markets"
 HEADERS    = {"APCA-API-KEY-ID": API_KEY, "APCA-API-SECRET-KEY": SECRET_KEY}
 IST        = timezone(timedelta(hours=5, minutes=30))
 
-SYMBOL_MAP = {"BTCUSD": "bitcoin", "XAUUSD": "gold", "EURUSD": "eur"}
+ALPHA_VANTAGE_KEY = "N3V3KTDZ3U1QLP2F"
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
 ADMIN = {"username": "Parvish", "password": "Parvish753210#"}
@@ -240,67 +240,82 @@ def confluence_signal(candles, params=None):
 # =========================================================================
 # DATA FUNCTIONS
 # =========================================================================
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=15)
 def get_live_prices():
     prices = {}
 
-    # ── BITCOIN — Binance (most accurate, free, no key needed) ────────────
+    # ── BITCOIN — Binance (fastest, most reliable) ─────────────────────────
     try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT", timeout=10)
+        r = requests.get("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT", timeout=8)
         d = r.json()
         prices["BTCUSD"] = {
             "price":      float(d["lastPrice"]),
             "change_pct": float(d["priceChangePercent"]),
             "high":       float(d["highPrice"]),
             "low":        float(d["lowPrice"]),
-            "volume":     float(d["volume"]),
         }
     except:
         try:
-            r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true", timeout=10)
-            d = r.json()
-            prices["BTCUSD"] = {"price": d["bitcoin"]["usd"], "change_pct": d["bitcoin"].get("usd_24h_change",0), "high":0,"low":0,"volume":0}
+            r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true", timeout=8)
+            d = r.json()["bitcoin"]
+            prices["BTCUSD"] = {"price": d["usd"], "change_pct": d.get("usd_24h_change",0), "high":0,"low":0}
         except:
-            prices["BTCUSD"] = {"price": 0, "change_pct": 0, "high":0,"low":0,"volume":0}
+            prices["BTCUSD"] = {"price": 0, "change_pct": 0, "high":0,"low":0}
 
-    # ── GOLD — metals.live (free, no key needed) ──────────────────────────
+    # ── GOLD — Alpha Vantage (accurate, live) ─────────────────────────────
     try:
-        r = requests.get("https://api.metals.live/v1/spot/gold", timeout=10)
+        url = f"https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=XAU&to_currency=USD&apikey={ALPHA_VANTAGE_KEY}"
+        r = requests.get(url, timeout=10)
         d = r.json()
-        gold_price = float(d[0].get("gold", 0)) if isinstance(d, list) else float(d.get("gold", 0))
-        prices["XAUUSD"] = {"price": gold_price, "change_pct": 0, "high":0,"low":0,"volume":0}
+        rate = d["Realtime Currency Exchange Rate"]
+        gold_price = float(rate["5. Exchange Rate"])
+        prices["XAUUSD"] = {"price": gold_price, "change_pct": 0, "high":0,"low":0}
     except:
         try:
-            r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1m&range=1d", timeout=10)
-            d = r.json()
-            meta = d["chart"]["result"][0]["meta"]
+            headers = {"User-Agent": "Mozilla/5.0"}
+            r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1m&range=1d", headers=headers, timeout=8)
+            d = r.json()["chart"]["result"][0]["meta"]
             prices["XAUUSD"] = {
-                "price":      meta["regularMarketPrice"],
-                "change_pct": meta.get("regularMarketChangePercent", 0),
-                "high":       meta.get("regularMarketDayHigh", 0),
-                "low":        meta.get("regularMarketDayLow", 0),
-                "volume":     0,
+                "price":      d["regularMarketPrice"],
+                "change_pct": d.get("regularMarketChangePercent", 0),
+                "high":       d.get("regularMarketDayHigh", 0),
+                "low":        d.get("regularMarketDayLow", 0),
             }
         except:
-            prices["XAUUSD"] = {"price": 0, "change_pct": 0, "high":0,"low":0,"volume":0}
+            try:
+                r = requests.get("https://api.metals.live/v1/spot/gold", timeout=8)
+                d = r.json()
+                gp = float(d[0]["gold"]) if isinstance(d, list) else float(d["gold"])
+                prices["XAUUSD"] = {"price": gp, "change_pct": 0, "high":0,"low":0}
+            except:
+                prices["XAUUSD"] = {"price": 0, "change_pct": 0, "high":0,"low":0}
 
-    # ── EUR/USD — Frankfurter (free, no key needed) ────────────────────────
+    # ── EUR/USD — Alpha Vantage (accurate, live) ──────────────────────────
     try:
-        r = requests.get("https://api.frankfurter.app/latest?from=EUR&to=USD", timeout=10)
+        url = f"https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=EUR&to_currency=USD&apikey={ALPHA_VANTAGE_KEY}"
+        r = requests.get(url, timeout=10)
         d = r.json()
-        prices["EURUSD"] = {"price": d["rates"]["USD"], "change_pct": 0, "high":0,"low":0,"volume":0}
+        rate = d["Realtime Currency Exchange Rate"]
+        eur_price = float(rate["5. Exchange Rate"])
+        prices["EURUSD"] = {"price": eur_price, "change_pct": 0, "high":0,"low":0}
     except:
         try:
-            r = requests.get("https://open.er-api.com/v6/latest/EUR", timeout=10)
-            d = r.json()
-            prices["EURUSD"] = {"price": d["rates"]["USD"], "change_pct": 0, "high":0,"low":0,"volume":0}
+            headers = {"User-Agent": "Mozilla/5.0"}
+            r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/EURUSD=X?interval=1m&range=1d", headers=headers, timeout=8)
+            d = r.json()["chart"]["result"][0]["meta"]
+            prices["EURUSD"] = {
+                "price":      d["regularMarketPrice"],
+                "change_pct": d.get("regularMarketChangePercent", 0),
+                "high":       d.get("regularMarketDayHigh", 0),
+                "low":        d.get("regularMarketDayLow", 0),
+            }
         except:
             try:
-                r = requests.get("https://api.exchangerate-api.com/v4/latest/EUR", timeout=10)
+                r = requests.get("https://api.frankfurter.app/latest?from=EUR&to=USD", timeout=8)
                 d = r.json()
-                prices["EURUSD"] = {"price": d["rates"]["USD"], "change_pct": 0, "high":0,"low":0,"volume":0}
+                prices["EURUSD"] = {"price": d["rates"]["USD"], "change_pct": 0, "high":0,"low":0}
             except:
-                prices["EURUSD"] = {"price": 0, "change_pct": 0, "high":0,"low":0,"volume":0}
+                prices["EURUSD"] = {"price": 0, "change_pct": 0, "high":0,"low":0}
 
     return prices
 
