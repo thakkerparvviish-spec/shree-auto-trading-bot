@@ -14,7 +14,7 @@ BASE_URL   = "https://paper-api.alpaca.markets"
 HEADERS    = {"APCA-API-KEY-ID": API_KEY, "APCA-API-SECRET-KEY": SECRET_KEY}
 IST        = timezone(timedelta(hours=5, minutes=30))
 
-SYMBOL_MAP = {"BTCUSD": "bitcoin", "XAUUSD": "gold", "EURUSD": "eur"}
+ALPHA_VANTAGE_KEY = "N3V3KTDZ3U1QLP2F"
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
 ADMIN = {"username": "Parvish", "password": "Parvish753210#"}
@@ -240,67 +240,72 @@ def confluence_signal(candles, params=None):
 # =========================================================================
 # DATA FUNCTIONS
 # =========================================================================
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def get_live_prices():
     prices = {}
+    import concurrent.futures
 
-    # ── BITCOIN — Binance (most accurate, free, no key needed) ────────────
-    try:
-        r = requests.get("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT", timeout=10)
-        d = r.json()
-        prices["BTCUSD"] = {
-            "price":      float(d["lastPrice"]),
-            "change_pct": float(d["priceChangePercent"]),
-            "high":       float(d["highPrice"]),
-            "low":        float(d["lowPrice"]),
-            "volume":     float(d["volume"]),
-        }
-    except:
+    def get_btc():
         try:
-            r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true", timeout=10)
+            r = requests.get("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT", timeout=5)
             d = r.json()
-            prices["BTCUSD"] = {"price": d["bitcoin"]["usd"], "change_pct": d["bitcoin"].get("usd_24h_change",0), "high":0,"low":0,"volume":0}
-        except:
-            prices["BTCUSD"] = {"price": 0, "change_pct": 0, "high":0,"low":0,"volume":0}
-
-    # ── GOLD — metals.live (free, no key needed) ──────────────────────────
-    try:
-        r = requests.get("https://api.metals.live/v1/spot/gold", timeout=10)
-        d = r.json()
-        gold_price = float(d[0].get("gold", 0)) if isinstance(d, list) else float(d.get("gold", 0))
-        prices["XAUUSD"] = {"price": gold_price, "change_pct": 0, "high":0,"low":0,"volume":0}
-    except:
-        try:
-            r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1m&range=1d", timeout=10)
-            d = r.json()
-            meta = d["chart"]["result"][0]["meta"]
-            prices["XAUUSD"] = {
-                "price":      meta["regularMarketPrice"],
-                "change_pct": meta.get("regularMarketChangePercent", 0),
-                "high":       meta.get("regularMarketDayHigh", 0),
-                "low":        meta.get("regularMarketDayLow", 0),
-                "volume":     0,
-            }
-        except:
-            prices["XAUUSD"] = {"price": 0, "change_pct": 0, "high":0,"low":0,"volume":0}
-
-    # ── EUR/USD — Frankfurter (free, no key needed) ────────────────────────
-    try:
-        r = requests.get("https://api.frankfurter.app/latest?from=EUR&to=USD", timeout=10)
-        d = r.json()
-        prices["EURUSD"] = {"price": d["rates"]["USD"], "change_pct": 0, "high":0,"low":0,"volume":0}
-    except:
-        try:
-            r = requests.get("https://open.er-api.com/v6/latest/EUR", timeout=10)
-            d = r.json()
-            prices["EURUSD"] = {"price": d["rates"]["USD"], "change_pct": 0, "high":0,"low":0,"volume":0}
+            return {"price": float(d["lastPrice"]), "change_pct": float(d["priceChangePercent"]), "high": float(d["highPrice"]), "low": float(d["lowPrice"])}
         except:
             try:
-                r = requests.get("https://api.exchangerate-api.com/v4/latest/EUR", timeout=10)
-                d = r.json()
-                prices["EURUSD"] = {"price": d["rates"]["USD"], "change_pct": 0, "high":0,"low":0,"volume":0}
+                r = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd&include_24hr_change=true", timeout=5)
+                d = r.json()["bitcoin"]
+                return {"price": d["usd"], "change_pct": d.get("usd_24h_change",0), "high":0,"low":0}
             except:
-                prices["EURUSD"] = {"price": 0, "change_pct": 0, "high":0,"low":0,"volume":0}
+                return {"price": 0, "change_pct": 0, "high":0,"low":0}
+
+    def get_gold():
+        try:
+            url = f"https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=XAU&to_currency=USD&apikey={ALPHA_VANTAGE_KEY}"
+            r = requests.get(url, timeout=5)
+            d = r.json()["Realtime Currency Exchange Rate"]
+            return {"price": float(d["5. Exchange Rate"]), "change_pct": 0, "high":0,"low":0}
+        except:
+            try:
+                headers = {"User-Agent": "Mozilla/5.0"}
+                r = requests.get("https://query1.finance.yahoo.com/v8/finance/chart/GC=F?interval=1m&range=1d", headers=headers, timeout=5)
+                d = r.json()["chart"]["result"][0]["meta"]
+                return {"price": d["regularMarketPrice"], "change_pct": d.get("regularMarketChangePercent",0), "high": d.get("regularMarketDayHigh",0), "low": d.get("regularMarketDayLow",0)}
+            except:
+                try:
+                    r = requests.get("https://api.metals.live/v1/spot/gold", timeout=5)
+                    d = r.json()
+                    gp = float(d[0]["gold"]) if isinstance(d, list) else float(d["gold"])
+                    return {"price": gp, "change_pct": 0, "high":0,"low":0}
+                except:
+                    return {"price": 0, "change_pct": 0, "high":0,"low":0}
+
+    def get_eurusd():
+        try:
+            url = f"https://www.alphavantage.co/query?function=CURRENCY_EXCHANGE_RATE&from_currency=EUR&to_currency=USD&apikey={ALPHA_VANTAGE_KEY}"
+            r = requests.get(url, timeout=5)
+            d = r.json()["Realtime Currency Exchange Rate"]
+            return {"price": float(d["5. Exchange Rate"]), "change_pct": 0, "high":0,"low":0}
+        except:
+            try:
+                r = requests.get("https://api.frankfurter.app/latest?from=EUR&to=USD", timeout=5)
+                d = r.json()
+                return {"price": d["rates"]["USD"], "change_pct": 0, "high":0,"low":0}
+            except:
+                try:
+                    r = requests.get("https://open.er-api.com/v6/latest/EUR", timeout=5)
+                    d = r.json()
+                    return {"price": d["rates"]["USD"], "change_pct": 0, "high":0,"low":0}
+                except:
+                    return {"price": 0, "change_pct": 0, "high":0,"low":0}
+
+    # Fetch all 3 prices in parallel — much faster!
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        btc_future  = executor.submit(get_btc)
+        gold_future = executor.submit(get_gold)
+        eur_future  = executor.submit(get_eurusd)
+        prices["BTCUSD"] = btc_future.result()
+        prices["XAUUSD"] = gold_future.result()
+        prices["EURUSD"] = eur_future.result()
 
     return prices
 
@@ -422,7 +427,7 @@ if not st.session_state.logged_in:
         st.markdown('<div style="text-align:center;font-size:28px;font-weight:900;color:#00d4aa;letter-spacing:3px;margin-bottom:20px;">🔐 LOGIN</div>', unsafe_allow_html=True)
         username = st.text_input("👤 Username", placeholder="Enter username")
         password = st.text_input("🔒 Password", type="password", placeholder="Enter password")
-        if st.button("🚀 LOGIN", use_container_width=True):
+        if st.button("🚀 LOGIN", width="stretch"):
             if username == ADMIN["username"] and password == ADMIN["password"]:
                 st.session_state.logged_in=True; st.session_state.role="admin"; st.session_state.current_user="Parvish"; st.rerun()
             elif username in st.session_state.clients:
@@ -487,7 +492,7 @@ else:
         page = st.sidebar.radio("📱 NAVIGATION", ["📊 Dashboard","💼 My Trading","📋 My Trade Report"])
 
     st.sidebar.markdown("---")
-    if st.sidebar.button("🚪 LOGOUT", use_container_width=True):
+    if st.sidebar.button("🚪 LOGOUT", width="stretch"):
         st.session_state.logged_in=False; st.session_state.role=None; st.session_state.current_user=None; st.rerun()
 
     account, positions, acc_err = load_account()
@@ -533,7 +538,7 @@ else:
                                   legend=dict(bgcolor="#161b22",bordercolor="#30363d",borderwidth=1),
                                   margin=dict(l=0,r=0,t=30,b=0))
                 fig.update_xaxes(gridcolor="#21262d"); fig.update_yaxes(gridcolor="#21262d")
-                st.plotly_chart(fig,use_container_width=True)
+                st.plotly_chart(fig,width="stretch")
             else:
                 st.warning("Loading data...")
 
@@ -596,7 +601,7 @@ else:
         if positions:
             import pandas as pd
             pdf = pd.DataFrame([{"Symbol":p["symbol"],"Qty":p["qty"],"Entry $":p["avg_entry_price"],"Current $":p["current_price"],"P&L $":p["unrealized_pl"]} for p in positions])
-            st.dataframe(pdf,use_container_width=True)
+            st.dataframe(pdf,width="stretch")
         else:
             st.info("No open positions.")
 
@@ -612,7 +617,7 @@ else:
             qty=st.number_input("📦 Trade Quantity",min_value=1,max_value=1000,value=client["quantity"])
             mode=st.radio("🔄 Trading Mode",["📄 Paper Trading","🔴 Live Trading"],index=0 if client["mode"]=="Paper" else 1)
             if "Live" in mode: st.error("⚠️ WARNING: Live Trading uses REAL MONEY!")
-            if st.button("💾 SAVE SETTINGS",use_container_width=True):
+            if st.button("💾 SAVE SETTINGS",width="stretch"):
                 st.session_state.clients[st.session_state.current_user].update({"strategy":sel_strat,"quantity":qty,"mode":"Live" if "Live" in mode else "Paper"})
                 st.success("✅ Settings saved!")
         with c2:
@@ -657,7 +662,7 @@ else:
         with c4: init_cap=st.number_input("💰 Initial Capital ($)",value=10000,step=1000)
         with c5: risk_pt=st.number_input("⚠️ Risk per Trade (%)",value=1.0,step=0.5)
 
-        if st.button("🚀 RUN BACKTEST",use_container_width=True):
+        if st.button("🚀 RUN BACKTEST",width="stretch"):
             with st.spinner("Fetching historical data..."):
                 try:
                     days_map={"1 Month":30,"3 Months":90,"6 Months":180,"1 Year":365}
@@ -713,8 +718,8 @@ else:
                         fig_eq.add_trace(go.Scatter(y=equity,mode="lines",line=dict(color="#00d4aa",width=2),fill="tozeroy",fillcolor="rgba(0,212,170,0.1)"))
                         fig_eq.update_layout(height=250,paper_bgcolor="#0d1117",plot_bgcolor="#0d1117",font=dict(color="#8b949e"),margin=dict(l=0,r=0,t=10,b=0),showlegend=False)
                         fig_eq.update_xaxes(gridcolor="#21262d"); fig_eq.update_yaxes(gridcolor="#21262d")
-                        st.plotly_chart(fig_eq,use_container_width=True)
-                        st.dataframe(df_t.style.format({"Entry $":"{:.4f}","Exit $":"{:.4f}","P&L $":"{:+.2f}","ROI %":"{:+.2f}%"}),use_container_width=True)
+                        st.plotly_chart(fig_eq,width="stretch")
+                        st.dataframe(df_t.style.format({"Entry $":"{:.4f}","Exit $":"{:.4f}","P&L $":"{:+.2f}","ROI %":"{:+.2f}%"}),width="stretch")
                         if win_rate>=50 and total_pnl>0: st.success(f"✅ PROFITABLE! Win Rate:{win_rate:.1f}% | ROI:{total_roi:+.2f}%")
                         else: st.warning(f"⚠️ Needs improvement. Win Rate:{win_rate:.1f}% | ROI:{total_roi:+.2f}%")
                     else: st.warning("No trades generated.")
@@ -744,7 +749,7 @@ else:
             st.markdown("---")
             df_r=pd.DataFrame(all_trades)
             if st.session_state.role=="client": df_r=df_r.drop(columns=["Client"])
-            st.dataframe(df_r.style.format({"Entry $":"{:.4f}","Exit $":"{:.4f}","P&L $":"{:+.2f}","ROI %":"{:+.2f}%"}),use_container_width=True)
+            st.dataframe(df_r.style.format({"Entry $":"{:.4f}","Exit $":"{:.4f}","P&L $":"{:+.2f}","ROI %":"{:+.2f}%"}),width="stretch")
 
     # ── CLIENT MANAGER ────────────────────────────────────────────────────────
     elif page=="👥 Client Manager":
@@ -774,7 +779,7 @@ else:
         with e1: nn=st.text_input("👤 Name",value=cd["name"])
         with e2: np=st.text_input("🔒 Password",value=cd["password"])
         with e3: nb=st.number_input("💰 Balance",value=cd["balance"],step=1000)
-        if st.button("💾 UPDATE CLIENT",use_container_width=True):
+        if st.button("💾 UPDATE CLIENT",width="stretch"):
             st.session_state.clients[ec].update({"name":nn,"password":np,"balance":nb}); st.success(f"✅ {nn} updated!")
 
     if auto_refresh:
